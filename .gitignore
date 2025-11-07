@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Test files with sensitive data
+test_pdf_url.py
+
 # C extensions
 *.so
 
@@ -192,6 +195,3 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
-
-# Test files (local development only)
-test_pdf_url.py
