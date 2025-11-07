@@ -1,0 +1,13 @@
+services:
+  pdf-reader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-pdf-reader-server
+    stdin_open: true  # Keep stdin open for stdio communication
+    tty: true  # Allocate a pseudo-TTY
+    # Note: MCP servers typically run via stdio, so no ports are exposed
+    # This docker-compose.yml is mainly for building the image
+    # To run the server, use: docker run -it --rm mcp-pdf-reader-server python src/server.py
+    # Or use the provided run-docker.sh / run-docker.ps1 scripts
+

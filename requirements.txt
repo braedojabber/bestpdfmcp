@@ -12,6 +12,15 @@ pytesseract>=0.3.10
 # Image processing library
 Pillow>=10.0.0
 
+# HTTP client for URL downloads
+httpx>=0.27.0
+
+# Numerical operations for image analysis
+numpy>=1.24.0
+
 # Optional: For better OCR results, you may want to install additional packages
 # opencv-python>=4.8.0  # For image preprocessing
-# numpy>=1.24.0  # For numerical operations on images
+
+# Vision model for detailed image descriptions (default enabled)
+transformers>=4.35.0  # For vision models like BLIP
+torch>=2.6.0  # For vision model inference (2.6+ required for security)

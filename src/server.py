@@ -4,13 +4,24 @@ import json
 import logging
 import os
 import tempfile
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
+import httpx
 import pytesseract
 from fastmcp import FastMCP
 from PIL import Image
+
+try:
+    from .image_analyzer import analyze_image_hybrid
+except ImportError:
+    # Fallback for direct execution
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent))
+    from image_analyzer import analyze_image_hybrid
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,6 +29,52 @@ logger = logging.getLogger("pdf-reader-server")
 
 # Initialize FastMCP server
 mcp = FastMCP("PDF Reader Server")
+
+def download_pdf_from_url(url: str) -> bytes:
+    """Download PDF from URL and return as bytes (synchronous)"""
+    try:
+        # Follow redirects (max 10 redirects)
+        with httpx.Client(timeout=30.0, follow_redirects=True, max_redirects=10) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            
+            # Validate content type
+            content_type = response.headers.get("content-type", "").lower()
+            if "pdf" not in content_type and not url.lower().endswith(".pdf"):
+                logger.warning(f"URL may not be a PDF (Content-Type: {content_type})")
+            
+            return response.content
+    except httpx.HTTPStatusError as e:
+        raise Exception(f"HTTP error downloading PDF: {e.response.status_code} - {e.response.text}")
+    except httpx.RequestError as e:
+        raise Exception(f"Request error downloading PDF: {str(e)}")
+    except Exception as e:
+        raise Exception(f"Error downloading PDF from URL: {str(e)}")
+
+def get_pdf_path_or_download(file_path: Optional[str] = None, url: Optional[str] = None) -> Tuple[Path, bool]:
+    """
+    Get PDF path from file_path or download from URL.
+    Returns tuple of (path, is_temp_file)
+    """
+    if file_path and url:
+        raise ValueError("Cannot specify both file_path and url. Use one or the other.")
+    
+    if url:
+        # Download PDF and save to temp file (synchronous)
+        pdf_bytes = download_pdf_from_url(url)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+        temp_file.write(pdf_bytes)
+        temp_file.close()
+        return Path(temp_file.name), True
+    elif file_path:
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        if not path.suffix.lower() == '.pdf':
+            raise ValueError(f"File is not a PDF: {file_path}")
+        return path, False
+    else:
+        raise ValueError("Either file_path or url must be provided")
 
 def validate_file_path(file_path: str) -> Path:
     """Validate that the file path exists and is a PDF"""
@@ -44,19 +101,22 @@ def get_page_range(doc: fitz.Document, page_range: Optional[Dict] = None) -> Tup
     return start, end
 
 @mcp.tool()
-def read_pdf_text(file_path: str, page_range: Optional[Dict] = None) -> Dict[str, Any]:
+def read_pdf_text(file_path: Optional[str] = None, url: Optional[str] = None, page_range: Optional[Dict] = None) -> Dict[str, Any]:
     """
     Extract text content from a PDF file
     
     Args:
-        file_path: Path to the PDF file to read
+        file_path: Path to the PDF file to read (optional if url is provided)
+        url: URL to download PDF from (optional if file_path is provided)
         page_range: Optional dict with 'start' and 'end' page numbers (1-indexed)
     
     Returns:
         Dictionary containing extracted text and metadata
     """
+    temp_file = None
     try:
-        path = validate_file_path(file_path)
+        path, is_temp = get_pdf_path_or_download(file_path, url)
+        temp_file = path if is_temp else None
         
         with fitz.open(str(path)) as doc:
             start_page, end_page = get_page_range(doc, page_range)
@@ -74,9 +134,10 @@ def read_pdf_text(file_path: str, page_range: Optional[Dict] = None) -> Dict[str
                 })
                 total_text += page_text + "\n"
             
-            return {
+            result = {
                 "success": True,
-                "file_path": str(path),
+                "file_path": str(path) if not is_temp else None,
+                "url": url if url else None,
                 "pages_processed": f"{start_page + 1}-{end_page + 1}",
                 "total_pages": len(doc),
                 "pages_text": pages_text,
@@ -85,29 +146,59 @@ def read_pdf_text(file_path: str, page_range: Optional[Dict] = None) -> Dict[str
                 "total_character_count": len(total_text)
             }
             
+            # Clean up temp file if created
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+            
+            return result
+            
     except Exception as e:
         logger.error(f"Error reading PDF text: {e}")
+        # Clean up temp file on error
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except:
+                pass
         return {
             "success": False,
             "error": str(e),
-            "file_path": file_path
+            "file_path": file_path,
+            "url": url if url else None
         }
 
 @mcp.tool()
-def extract_pdf_images(file_path: str, output_dir: Optional[str] = None, page_range: Optional[Dict] = None) -> Dict[str, Any]:
+def extract_pdf_images(
+    file_path: Optional[str] = None,
+    url: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    page_range: Optional[Dict] = None,
+    analyze_images: bool = True,
+    use_vision_model: bool = True,
+    ocr_language: str = "eng"
+) -> Dict[str, Any]:
     """
-    Extract all images from a PDF file
+    Extract all images from a PDF file with optional image analysis
     
     Args:
-        file_path: Path to the PDF file
+        file_path: Path to the PDF file (optional if url is provided)
+        url: URL to download PDF from (optional if file_path is provided)
         output_dir: Directory to save extracted images (optional, defaults to temp dir)
         page_range: Optional dict with 'start' and 'end' page numbers (1-indexed)
+        analyze_images: Whether to analyze extracted images (default: True)
+        use_vision_model: Whether to use vision model for image descriptions (default: True)
+        ocr_language: OCR language code for text extraction from images (default: 'eng')
     
     Returns:
-        Dictionary containing information about extracted images
+        Dictionary containing information about extracted images with analysis
     """
+    temp_file = None
     try:
-        path = validate_file_path(file_path)
+        path, is_temp = get_pdf_path_or_download(file_path, url)
+        temp_file = path if is_temp else None
         
         if output_dir is None:
             output_dir = tempfile.mkdtemp(prefix="pdf_images_")
@@ -149,7 +240,7 @@ def extract_pdf_images(file_path: str, output_dir: Optional[str] = None, page_ra
                         with open(img_path, "wb") as img_file:
                             img_file.write(img_data)
                         
-                        extracted_images.append({
+                        image_info = {
                             "page_number": page_num + 1,
                             "image_index": img_index + 1,
                             "filename": img_filename,
@@ -157,7 +248,26 @@ def extract_pdf_images(file_path: str, output_dir: Optional[str] = None, page_ra
                             "width": pix.width,
                             "height": pix.height,
                             "size_bytes": len(img_data)
-                        })
+                        }
+                        
+                        # Analyze image if requested
+                        if analyze_images:
+                            try:
+                                analysis = analyze_image_hybrid(
+                                    str(img_path),
+                                    use_vision=use_vision_model,
+                                    ocr_language=ocr_language
+                                )
+                                image_info["analysis"] = analysis
+                                image_info["description"] = analysis.get("description", "")
+                            except Exception as analysis_error:
+                                logger.warning(f"Image analysis failed for {img_path}: {analysis_error}")
+                                image_info["analysis"] = {
+                                    "error": str(analysis_error)
+                                }
+                                image_info["description"] = f"Image analysis failed: {str(analysis_error)}"
+                        
+                        extracted_images.append(image_info)
                         
                         pix = None
                         
@@ -165,38 +275,67 @@ def extract_pdf_images(file_path: str, output_dir: Optional[str] = None, page_ra
                         logger.warning(f"Failed to extract image {img_index + 1} from page {page_num + 1}: {img_error}")
                         continue
         
-        return {
+        # Calculate summary statistics
+        images_with_text = sum(1 for img in extracted_images if img.get("analysis", {}).get("analysis_summary", {}).get("has_text", False))
+        images_analyzed = sum(1 for img in extracted_images if "analysis" in img)
+        
+        result = {
             "success": True,
-            "file_path": str(path),
+            "file_path": str(path) if not is_temp else None,
+            "url": url if url else None,
             "output_directory": output_dir,
             "pages_processed": f"{start_page + 1}-{end_page + 1}",
             "images_extracted": len(extracted_images),
-            "images": extracted_images
+            "images": extracted_images,
+            "summary": {
+                "total_images": len(extracted_images),
+                "images_with_text": images_with_text,
+                "images_analyzed": images_analyzed
+            }
         }
+        
+        # Clean up temp file if created
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+        
+        return result
         
     except Exception as e:
         logger.error(f"Error extracting PDF images: {e}")
+        # Clean up temp file on error
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except:
+                pass
         return {
             "success": False,
             "error": str(e),
-            "file_path": file_path
+            "file_path": file_path,
+            "url": url if url else None
         }
 
 @mcp.tool()
-def read_pdf_with_ocr(file_path: str, page_range: Optional[Dict] = None, ocr_language: str = "eng") -> Dict[str, Any]:
+def read_pdf_with_ocr(file_path: Optional[str] = None, url: Optional[str] = None, page_range: Optional[Dict] = None, ocr_language: str = "eng") -> Dict[str, Any]:
     """
     Extract text from PDF including OCR text from images
     
     Args:
-        file_path: Path to the PDF file
+        file_path: Path to the PDF file (optional if url is provided)
+        url: URL to download PDF from (optional if file_path is provided)
         page_range: Optional dict with 'start' and 'end' page numbers (1-indexed)
         ocr_language: OCR language code (default: 'eng')
     
     Returns:
         Dictionary containing extracted text from both text and images
     """
+    temp_file = None
     try:
-        path = validate_file_path(file_path)
+        path, is_temp = get_pdf_path_or_download(file_path, url)
+        temp_file = path if is_temp else None
         
         with fitz.open(str(path)) as doc:
             start_page, end_page = get_page_range(doc, page_range)
@@ -273,9 +412,10 @@ def read_pdf_with_ocr(file_path: str, page_range: Optional[Dict] = None, ocr_lan
             
             combined_all_text = f"{total_text}\n{total_ocr_text}".strip()
             
-            return {
+            result = {
                 "success": True,
-                "file_path": str(path),
+                "file_path": str(path) if not is_temp else None,
+                "url": url if url else None,
                 "pages_processed": f"{start_page + 1}-{end_page + 1}",
                 "total_pages": len(doc),
                 "ocr_language": ocr_language,
@@ -292,28 +432,46 @@ def read_pdf_with_ocr(file_path: str, page_range: Optional[Dict] = None, ocr_lan
                 "all_text_combined": combined_all_text
             }
             
+            # Clean up temp file if created
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+            
+            return result
+            
     except Exception as e:
         logger.error(f"Error reading PDF with OCR: {e}")
+        # Clean up temp file on error
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except:
+                pass
         return {
             "success": False,
             "error": str(e),
-            "file_path": file_path
+            "file_path": file_path,
+            "url": url if url else None
         }
 
 @mcp.tool()
-def get_pdf_info(file_path: str) -> Dict[str, Any]:
+def get_pdf_info(file_path: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
     """
     Get metadata and information about a PDF file
     
     Args:
-        file_path: Path to the PDF file
+        file_path: Path to the PDF file (optional if url is provided)
+        url: URL to download PDF from (optional if file_path is provided)
     
     Returns:
         Dictionary containing PDF metadata and statistics
     """
+    temp_file = None
     try:
-        path = validate_file_path(file_path)
-        file_stats = path.stat()
+        path, is_temp = get_pdf_path_or_download(file_path, url)
+        temp_file = path if is_temp else None
         
         with fitz.open(str(path)) as doc:
             # Get basic document info
@@ -337,9 +495,12 @@ def get_pdf_info(file_path: str) -> Dict[str, Any]:
                     "page_height": page.rect.height
                 })
             
-            return {
+            file_stats = path.stat()
+            
+            result = {
                 "success": True,
-                "file_path": str(path),
+                "file_path": str(path) if not is_temp else None,
+                "url": url if url else None,
                 "file_info": {
                     "size_bytes": file_stats.st_size,
                     "size_mb": round(file_stats.st_size / (1024 * 1024), 2),
@@ -365,28 +526,49 @@ def get_pdf_info(file_path: str) -> Dict[str, Any]:
                 },
                 "page_details": page_info
             }
+        
+        # Clean up temp file if created (after document is closed)
+        if temp_file and temp_file.exists():
+            try:
+                import time
+                time.sleep(0.1)  # Brief delay to ensure file is released
+                temp_file.unlink()
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+        
+        return result
             
     except Exception as e:
         logger.error(f"Error getting PDF info: {e}")
+        # Clean up temp file on error
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except:
+                pass
         return {
             "success": False,
             "error": str(e),
-            "file_path": file_path
+            "file_path": file_path,
+            "url": url if url else None
         }
 
 @mcp.tool()
-def analyze_pdf_structure(file_path: str) -> Dict[str, Any]:
+def analyze_pdf_structure(file_path: Optional[str] = None, url: Optional[str] = None) -> Dict[str, Any]:
     """
     Analyze PDF structure including pages, images, and text blocks
     
     Args:
-        file_path: Path to the PDF file
+        file_path: Path to the PDF file (optional if url is provided)
+        url: URL to download PDF from (optional if file_path is provided)
     
     Returns:
         Dictionary containing detailed structural analysis
     """
+    temp_file = None
     try:
-        path = validate_file_path(file_path)
+        path, is_temp = get_pdf_path_or_download(file_path, url)
+        temp_file = path if is_temp else None
         
         with fitz.open(str(path)) as doc:
             structure_analysis = {
@@ -475,18 +657,35 @@ def analyze_pdf_structure(file_path: str) -> Dict[str, Any]:
                 "avg_text_blocks_per_page": round(structure_analysis["content_analysis"]["total_text_blocks"] / len(doc), 2)
             }
             
-            return {
+            result = {
                 "success": True,
-                "file_path": str(path),
+                "file_path": str(path) if not is_temp else None,
+                "url": url if url else None,
                 **structure_analysis
             }
             
+            # Clean up temp file if created
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+            
+            return result
+            
     except Exception as e:
         logger.error(f"Error analyzing PDF structure: {e}")
+        # Clean up temp file on error
+        if temp_file and temp_file.exists():
+            try:
+                temp_file.unlink()
+            except:
+                pass
         return {
             "success": False,
             "error": str(e),
-            "file_path": file_path
+            "file_path": file_path,
+            "url": url if url else None
         }
 
 if __name__ == "__main__":

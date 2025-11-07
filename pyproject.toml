@@ -27,6 +27,10 @@ dependencies = [
     "PyMuPDF>=1.23.0",
     "pytesseract>=0.3.10",
     "Pillow>=10.0.0",
+    "httpx>=0.27.0",
+    "numpy>=1.24.0",
+    "transformers>=4.35.0",
+    "torch>=2.6.0",
 ]
 
 [project.optional-dependencies]
@@ -38,13 +42,16 @@ dev = [
 ]
 enhanced = [
     "opencv-python>=4.8.0",
-    "numpy>=1.24.0",
+]
+vision = [
+    # Vision model dependencies are now in main dependencies
+    # Keeping this group for backward compatibility
 ]
 
 [project.urls]
-Homepage = "https://github.com/labeveryday/mcp_pdf_reader"
-Repository = "https://github.com/labeveryday/mcp_pdf_reader"
-Issues = "https://github.com/labeveryday/mcp_pdf_reader"
+Homepage = "https://github.com/braedojabber/bestpdfmcp"
+Repository = "https://github.com/braedojabber/bestpdfmcp"
+Issues = "https://github.com/braedojabber/bestpdfmcp/issues"
 
 [project.scripts]
 mcp-pdf-reader = "pdf_reader_server:main"
