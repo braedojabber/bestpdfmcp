@@ -3,9 +3,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Test files with sensitive data
-test_pdf_url.py
-
 # C extensions
 *.so
 
