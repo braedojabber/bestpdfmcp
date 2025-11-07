@@ -3,7 +3,7 @@ name = "mcp-pdf-reader-server"
 version = "0.1.0"
 description = "MCP server for reading PDFs with text extraction, image extraction, and OCR"
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "braedojabber", email = ""}
 ]
 readme = "README.md"
 license = {text = "MIT"}

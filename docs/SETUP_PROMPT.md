@@ -13,12 +13,12 @@ Setup requirements:
 1. Build the Docker image: cd mcp_pdf_reader && docker build -t mcp-pdf-reader-server .
 2. Verify the Docker image was created: docker images | grep mcp-pdf-reader-server
 3. Configure Claude Code to use the MCP server via CLI:
-   - Use: claude mcp add --transport stdio --scope user pdf-reader -- node "C:\Users\Braedn Heney\Desktop\mcp-servers\mcp_pdf_reader\pdf-reader-docker-bridge.js"
+   - Use: claude mcp add --transport stdio --scope user pdf-reader -- node "C:\Users\YourName\Desktop\mcp-servers\bestpdfmcp\pdf-reader-docker-bridge.js"
    - Verify connection with: claude mcp list
 4. Configure Claude Desktop:
-   - Edit C:\Users\Braedn Heney\AppData\Roaming\Claude\claude_desktop_config.json
+   - Edit C:\Users\YourName\AppData\Roaming\Claude\claude_desktop_config.json
    - Add the bridge script configuration using stdio transport
-   - The bridge file is at: C:\Users\Braedn Heney\Desktop\mcp-servers\mcp_pdf_reader\pdf-reader-docker-bridge.js
+   - The bridge file is at: C:\Users\YourName\Desktop\mcp-servers\bestpdfmcp\pdf-reader-docker-bridge.js
    - Show me the exact JSON to add
 5. Test both connections work
 

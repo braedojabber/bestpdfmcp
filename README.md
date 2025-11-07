@@ -14,13 +14,13 @@ I need to set up the PDF Reader MCP server. Please:
 1. Clone the repository: git clone https://github.com/braedojabber/bestpdfmcp.git && cd bestpdfmcp
 2. Build the Docker image: docker build -t mcp-pdf-reader-server .
 3. Verify the image: docker images | grep mcp-pdf-reader-server
-4. Configure Claude Code: claude mcp add --transport stdio --scope user pdf-reader -- node "C:\Users\Braedn Heney\Desktop\mcp-servers\mcp_pdf_reader\pdf-reader-docker-bridge.js"
+4. Configure Claude Code: claude mcp add --transport stdio --scope user pdf-reader -- node "C:\Users\YourName\Desktop\mcp-servers\bestpdfmcp\pdf-reader-docker-bridge.js"
 5. Configure Claude Desktop: Edit %APPDATA%\Claude\claude_desktop_config.json and add:
    {
      "mcpServers": {
        "pdf-reader": {
          "command": "node",
-         "args": ["C:\\Users\\Braedn Heney\\Desktop\\mcp-servers\\mcp_pdf_reader\\pdf-reader-docker-bridge.js"],
+         "args": ["C:\\Users\\YourName\\Desktop\\mcp-servers\\bestpdfmcp\\pdf-reader-docker-bridge.js"],
          "env": {}
        }
      }
@@ -30,7 +30,7 @@ I need to set up the PDF Reader MCP server. Please:
      "mcpServers": {
        "pdf-reader": {
          "command": "node",
-         "args": ["C:\\Users\\Braedn Heney\\Desktop\\mcp-servers\\mcp_pdf_reader\\pdf-reader-docker-bridge.js"],
+         "args": ["C:\\Users\\YourName\\Desktop\\mcp-servers\\bestpdfmcp\\pdf-reader-docker-bridge.js"],
          "env": {}
        }
      }
